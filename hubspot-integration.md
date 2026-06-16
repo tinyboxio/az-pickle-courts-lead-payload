@@ -25,24 +25,28 @@ Why a Deal only for `estimate`: a Deal is HubSpot's money-and-pipeline object, a
 - `lifecyclestage` → `lead`
 - `az_form_type` (custom dropdown: `contact` / `estimate` / `design`) to segment by entry point
 
-**Deal** (estimate) — `amount` = `estimatedTotal.min`, plus custom properties:
+**Deal** (estimate) — a mix of standard, existing, and new `az_*` properties:
 
-| Payload field | HubSpot deal property | Type |
-|---------------|----------------------|------|
-| `courtSize` | `az_court_size` | single-line text |
-| `courtDimensions` | `az_court_dimensions` | single-line text |
-| `baseCondition` | `az_base_condition` | single-line text |
-| `terrain` | `az_terrain` | single-line text |
-| `extras.fencing` / `extras.lighting` / `extras.net` | `az_fencing`, `az_lighting`, `az_net` | dropdown |
-| `estimatedTotal.min` / `estimatedTotal.max` | `az_estimate_min`, `az_estimate_max` | number |
+| HubSpot deal property | Source | Notes |
+|---|---|---|
+| `amount` | `estimatedTotal.min` | standard HubSpot field |
+| `estimate_amount_website` | midpoint of min/max | **existing** property (hybrid reuse) |
+| `lead_source__campaign` | `'Website Estimator'` | **existing** — note the double underscore |
+| `dealname` | `"{name} — {courtSize}"` | standard |
+| `az_court_size` | `courtSize` | new |
+| `az_court_dimensions` | `courtDimensions` | new |
+| `az_base_condition` | `baseCondition` | new |
+| `az_terrain` | `terrain` | new |
+| `az_fencing` / `az_lighting` / `az_net` | `extras.*` | new |
+| `az_estimate_min` / `az_estimate_max` | `estimatedTotal.min` / `.max` | new |
 
 `lineItems` and `terrainItem` go into a Note (variable-length breakdown, not worth a property each).
 
 ## 3. One-time setup
 
 1. **Private App token** — HubSpot → Settings → Integrations → Private Apps → Create. Scopes: `crm.objects.contacts.write/read`, `crm.objects.deals.write/read`, `crm.objects.notes.write`. Put the `pat-...` token in Vercel env as `HUBSPOT_TOKEN`.
-2. **Create the custom properties** above (Settings → Properties, or via the API). Contacts get `az_form_type`; Deals get the `az_*` set.
-3. **Grab the pipeline + stage ids** — the default pipeline is `default`; you need the internal id of your "New lead" stage (e.g. `appointmentscheduled` on the default pipeline). Settings → Objects → Deals → Pipelines.
+2. **Create the new custom properties** (Settings → Properties, or via the API): `az_form_type` on Contacts; `az_court_size`, `az_court_dimensions`, `az_base_condition`, `az_terrain`, `az_fencing`, `az_lighting`, `az_net`, `az_estimate_min`, `az_estimate_max` on Deals. Two **existing** Deal properties are also written — `estimate_amount_website` and `lead_source__campaign` — which already exist in the account and don't need creating.
+3. **Pipeline + stage** are baked in as verified account constants: `PIPELINE_ID = 'default'` and `NEW_LEAD_STAGE_ID = 'appointmentscheduled'`. Change them only if the pipeline or stage id changes (Settings → Objects → Deals → Pipelines).
 
 ## 4. Code
 
@@ -53,6 +57,10 @@ Server-only lib (`src/lib/server/...` is never bundled to the client), matching 
 import { HUBSPOT_TOKEN } from '$env/static/private';
 
 const API = 'https://api.hubapi.com';
+
+// Verified account constants
+const PIPELINE_ID = 'default';
+const NEW_LEAD_STAGE_ID = 'appointmentscheduled';
 
 async function hs(path, body, method = 'POST') {
     const res = await fetch(`${API}${path}`, {
@@ -100,11 +108,14 @@ export async function sendLeadToHubSpot(type, p) {
 
     if (type === 'estimate') {
         const t = p.estimatedTotal || {};
+        const midpoint = Math.round(((t.min ?? 0) + (t.max ?? 0)) / 2);
         await createDeal(contactId, {
             dealname: `${p.name} — ${p.courtSize}`,
             amount: String(t.min ?? ''),
-            pipeline: 'default',
-            dealstage: 'appointmentscheduled', // <-- your "New lead" stage id
+            estimate_amount_website: String(midpoint),  // existing property — hybrid reuse (midpoint)
+            lead_source__campaign: 'Website Estimator', // existing property — note the double underscore
+            pipeline: PIPELINE_ID,
+            dealstage: NEW_LEAD_STAGE_ID,
             az_court_size: p.courtSize,
             az_court_dimensions: p.courtDimensions,
             az_base_condition: p.baseCondition,
@@ -142,9 +153,11 @@ try {
 
 Keep the `await` (don't fire-and-forget): on Vercel's serverless runtime, work left running after the response can be killed when the function suspends, so let it complete inside the request.
 
-## 5. Reliability notes
+## 5. Decisions baked in & reliability notes
 
-- **Isolate failures.** The `try/catch` above means HubSpot being down never 500s the form.
+- **Only `estimate` creates a deal.** `contact` and `design` stay Contact + Note.
+- **Hybrid properties.** The dollar value also writes to the existing `estimate_amount_website` (midpoint of min/max), and `lead_source__campaign` is set to `'Website Estimator'`. Descriptive fields use the new `az_*` set. Those two are the only pre-existing properties the integration touches; everything `az_*` is new and needs creating.
+- **`courtImage` is intentionally dropped in v1.** Saving it needs an extra step: upload to the Files API (`POST /files/v3/files`), then set `hs_attachment_ids` on the note. The color names in the note are usually enough.
+- **Isolate failures.** The `try/catch` in `+server.js` means HubSpot being down never 500s the form.
 - **Idempotency.** The batch upsert keys on email, so duplicate submits update rather than duplicate the contact. Deals are not deduped — two estimates create two deals, which is usually the intent (two opportunities).
-- **The design PNG** as a real attachment needs an extra step: upload `courtImage` to the Files API (`POST /files/v3/files`), then set `hs_attachment_ids` on the note. Skippable for v1 — the color names in the note are usually enough.
 - **Lighter alternative.** If you ever want contacts only and no deals, the HubSpot Forms Submissions API maps fields straight to contact properties and can trigger workflows, but it can't create deals, so you'd lose the pipeline value on the estimate flow.
