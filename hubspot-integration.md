@@ -23,7 +23,7 @@ Why a Deal only for `estimate`: a Deal is HubSpot's money-and-pipeline object, a
 - `email`, `phone` → standard
 - `name` → split into `firstname` / `lastname`
 - `lifecyclestage` → `lead`
-- `az_form_type` (custom dropdown: `contact` / `estimate` / `design`) to segment by entry point
+- `az_form_type` (single-line text, or a dropdown whose option values are exactly `contact` / `estimate` / `design`) to segment by entry point
 
 **Deal** (estimate) — a mix of standard, existing, and new `az_*` properties:
 
@@ -46,6 +46,7 @@ Why a Deal only for `estimate`: a Deal is HubSpot's money-and-pipeline object, a
 
 1. **Private App token** — HubSpot → Settings → Integrations → Private Apps → Create. Scopes: `crm.objects.contacts.write/read`, `crm.objects.deals.write/read`, `crm.objects.notes.write`. Put the `pat-...` token in Vercel env as `HUBSPOT_TOKEN`.
 2. **Create the new custom properties** (Settings → Properties, or via the API): `az_form_type` on Contacts; `az_court_size`, `az_court_dimensions`, `az_base_condition`, `az_terrain`, `az_fencing`, `az_lighting`, `az_net`, `az_estimate_min`, `az_estimate_max` on Deals. Two **existing** Deal properties are also written — `estimate_amount_website` and `lead_source__campaign` — which already exist in the account and don't need creating.
+   - **Property types:** make `az_estimate_min` / `az_estimate_max` **number**; make everything else **single-line text** for v1. Do **not** create `az_fencing` / `az_lighting` / `az_net` (or `az_form_type`) as dropdowns unless their option internal values exactly match the payload enums — see the validation note in §5.
 3. **Pipeline + stage** are baked in as verified account constants: `PIPELINE_ID = 'default'` and `NEW_LEAD_STAGE_ID = 'appointmentscheduled'`. Change them only if the pipeline or stage id changes (Settings → Objects → Deals → Pipelines).
 
 ## 4. Code
@@ -157,6 +158,8 @@ Keep the `await` (don't fire-and-forget): on Vercel's serverless runtime, work l
 
 - **Only `estimate` creates a deal.** `contact` and `design` stay Contact + Note.
 - **Hybrid properties.** The dollar value also writes to the existing `estimate_amount_website` (midpoint of min/max), and `lead_source__campaign` is set to `'Website Estimator'`. Descriptive fields use the new `az_*` set. Those two are the only pre-existing properties the integration touches; everything `az_*` is new and needs creating.
+- **The two money fields intentionally differ.** Standard `amount` is the conservative low end (`estimatedTotal.min`) while `estimate_amount_website` is the midpoint. They are not meant to agree — not a bug. If you'd rather they match, point both at the same number.
+- **Dropdown validation foot-gun (close before launch).** `az_fencing` / `az_lighting` / `az_net` receive raw payload enums (`none/standard/premium`, `none/2pole/4pole`, `none/standalone/permanent`), and `az_form_type` receives `contact/estimate/design`. If any of these are created as HubSpot **dropdown (enumeration)** properties, their option internal values must exactly equal those strings or HubSpot silently rejects the write. Safest for v1: create them as **single-line text**, which accepts any value. If you do want dropdowns, set the internal values to exactly those enums.
 - **`courtImage` is intentionally dropped in v1.** Saving it needs an extra step: upload to the Files API (`POST /files/v3/files`), then set `hs_attachment_ids` on the note. The color names in the note are usually enough.
 - **Isolate failures.** The `try/catch` in `+server.js` means HubSpot being down never 500s the form.
 - **Idempotency.** The batch upsert keys on email, so duplicate submits update rather than duplicate the contact. Deals are not deduped — two estimates create two deals, which is usually the intent (two opportunities).
