@@ -27,7 +27,7 @@ Upserting the Contact by email keeps one record per person. Note: deals are **no
 | `email`, `phone` | payload | standard; `phone` omitted if absent |
 | `firstname` / `lastname` | split from `name` | standard |
 | `lifecyclestage` | `'lead'` | standard |
-| `az_form_type` | the form type | dropdown (`contact`/`estimate`/`design`) — **contact-only**, no deal equivalent |
+| `az_form_type` | the form type | `contact`/`estimate`/`design` — set on **both** the contact and the deal (text field on deals) |
 | `az_lead_detail` | `message` (contact) or colors (design) | multi-line text |
 
 **Deal** (all three):
@@ -183,7 +183,7 @@ try {
 
 - **All three create deals** (changed from estimate-only). Distinguished by `lead_source__campaign` + dealname; estimates also carry a dollar `amount` and the `az_*` fields.
 - **The two new source values are a dropdown prerequisite.** `Website Contact Form` and `Website Court Builder` must exist as `lead_source__campaign` options or those deal writes are rejected (caught/logged — the contact still upserts, just no deal). Estimate is unaffected.
-- **`az_form_type` is contact-only.** No deal property exists for it, and writing an undefined property would 400 the whole deal — so deals are tagged by source, not `az_form_type`.
+- **`az_form_type` tags both** the contact and the deal. On contacts it's a dropdown with lowercase values; on deals it's a **text** field (so it accepts the same lowercase `contact`/`estimate`/`design` with no option-matching).
 - **No dedup on deals** — design-then-estimate by the same person creates two deals. Low volume, usually fine.
 - **The two money fields differ on purpose:** `amount` = `estimatedTotal.min`; `estimate_amount_website` = midpoint.
 - **`courtImage` is dropped in v1** — saving the render needs the Files API.
